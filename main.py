@@ -15,27 +15,23 @@ async def home():
 
 
 # ------------------------
-# GETIR STOCKS API
+# GETIR API – Ortak ayarlar
 # ------------------------
 
-STOCKS_URL = "https://franchise-api-gateway.getirapi.com/stocks"
+BASE_API = "https://franchise-api-gateway.getirapi.com"
+STOCKS_URL = f"{BASE_API}/stocks"
+WAREHOUSES_URL = f"{BASE_API}/users/warehouses/"
 
 
-async def fetch_stocks(limit: int = 100, offset: int = 0):
+def build_getir_headers() -> dict:
     """
-    Getir franchise API'sindeki stocks endpoint'ine istek atar.
-
-    - Authorization: Bearer <GETIR_BEARER_TOKEN>
-    - limit / offset query parametreleri ile sayfalama yapar.
+    Tarayıcıya benzer header seti oluşturur.
+    Authorization dışında gizli bir şey yok.
     """
-
     if not GETIR_BEARER_TOKEN:
-        return {
-            "ok": False,
-            "reason": "GETIR_BEARER_TOKEN ortam değişkeni tanımlı değil."
-        }
+        raise RuntimeError("GETIR_BEARER_TOKEN tanımlı değil.")
 
-    headers = {
+    return {
         "Authorization": f"Bearer {GETIR_BEARER_TOKEN}",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -49,6 +45,24 @@ async def fetch_stocks(limit: int = 100, offset: int = 0):
             "Chrome/142.0.0.0 Safari/537.36"
         ),
     }
+
+
+# ------------------------
+# GETIR STOCKS API
+# ------------------------
+
+async def fetch_stocks(limit: int = 100, offset: int = 0):
+    """
+    Getir franchise API'sindeki stocks endpoint'ine istek atar.
+
+    Şu an 500 UnknownError dönüyor.
+    Yine de debug için fonksiyon burada dursun.
+    """
+
+    try:
+        headers = build_getir_headers()
+    except RuntimeError as e:
+        return {"ok": False, "reason": str(e)}
 
     params = {
         "limit": limit,
@@ -65,13 +79,11 @@ async def fetch_stocks(limit: int = 100, offset: int = 0):
             "error": str(e),
         }
 
-    # JSON parse etmeyi dene
     try:
         data = resp.json()
     except Exception:
         data = None
 
-    # Ön izleme: çok veri varsa ilk birkaç elemanı göster
     preview = data
     if isinstance(data, list):
         preview = data[:3]
@@ -92,12 +104,68 @@ async def fetch_stocks(limit: int = 100, offset: int = 0):
 @app.get("/test-stocks")
 async def test_stocks(limit: int = 50, offset: int = 0):
     """
-    Tarayıcıdan çağırıp Getir stocks endpoint'ini test etmek için.
-    Örn:
-      /test-stocks
-      /test-stocks?limit=10&offset=0
+    /stocks endpoint'ini test etmek için.
+    Şu an 500 UnknownError veriyor, ama referans olarak kalsın.
     """
     return await fetch_stocks(limit=limit, offset=offset)
+
+
+# ------------------------
+# GETIR USERS/WAREHOUSES API
+# ------------------------
+
+async def fetch_warehouses():
+    """
+    GET /users/warehouses/ endpoint'ini test eder.
+    Bu endpoint başarılıysa, token Render'dan çalışıyor demektir.
+    """
+
+    try:
+        headers = build_getir_headers()
+    except RuntimeError as e:
+        return {"ok": False, "reason": str(e)}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(WAREHOUSES_URL, headers=headers)
+    except Exception as e:
+        return {
+            "ok": False,
+            "step": "request",
+            "error": str(e),
+        }
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = resp.text
+
+    preview = data
+    if isinstance(data, list):
+        preview = data[:3]
+    elif isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
+        preview = {
+            **{k: v for k, v in data.items() if k != "items"},
+            "items_preview": data["items"][:3],
+        }
+
+    return {
+        "ok": resp.status_code == 200,
+        "status_code": resp.status_code,
+        "url": str(resp.url),
+        "preview": preview,
+    }
+
+
+@app.get("/test-warehouses")
+async def test_warehouses():
+    """
+    Tarayıcıdan:
+      /test-warehouses
+
+    ile çağırıp, Render'dan Getir API'ine token'lı istek atıp atamadığımızı test eder.
+    """
+    return await fetch_warehouses()
 
 
 # ------------------------
@@ -112,10 +180,8 @@ async def telegram_webhook(request: Request):
     """
     data = await request.json()
 
-    # Normal mesaj veya düzenlenmiş mesaj olabilir
     message = data.get("message") or data.get("edited_message")
     if not message:
-        # Mesaj içermeyen update'ler için bir şey yapmıyoruz
         return {"ok": True}
 
     chat = message.get("chat", {})
