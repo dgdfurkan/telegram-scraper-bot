@@ -38,8 +38,16 @@ async def fetch_stocks(limit: int = 100, offset: int = 0):
     headers = {
         "Authorization": f"Bearer {GETIR_BEARER_TOKEN}",
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
         "Origin": "https://franchise.getir.com",
         "Referer": "https://franchise.getir.com/stock/current",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/142.0.0.0 Safari/537.36"
+        ),
     }
 
     params = {
