@@ -4,8 +4,7 @@ from fastapi import FastAPI, Request
 
 # Ortam değişkenleri (Render Environment Variables)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-GETIR_EMAIL = os.environ.get("GETIR_EMAIL")
-GETIR_PASSWORD = os.environ.get("GETIR_PASSWORD")
+GETIR_BEARER_TOKEN = os.environ.get("GETIR_BEARER_TOKEN")
 
 app = FastAPI()
 
@@ -16,78 +15,85 @@ async def home():
 
 
 # ------------------------
-# GETIR LOGIN + STOCK TEST
+# GETIR STOCKS API
 # ------------------------
 
-LOGIN_URL = "https://franchise.getir.com/login?redirect_uri=%2Fstock%2Fcurrent"
-STOCK_URL = "https://franchise.getir.com/stock/current"
+STOCKS_URL = "https://franchise-api-gateway.getirapi.com/stocks"
 
 
-async def login_and_fetch_stock():
+async def fetch_stocks(limit: int = 100, offset: int = 0):
     """
-    Getir franchise paneline login olmayı DENEYEN ve
-    /stock/current sayfasını çekmeye çalışan basit iskelet.
+    Getir franchise API'sindeki stocks endpoint'ine istek atar.
 
-    Not:
-    - Buradaki LOGIN_URL ve form alan isimleri (email/password),
-      Getir'in gerçek login akışına göre ayarlanabilir.
-    - Şu an için yapı hazır; ileride Network tab'dan baktığımız
-      bilgiye göre ince ayar yapacağız.
+    - Authorization: Bearer <GETIR_BEARER_TOKEN>
+    - limit / offset query parametreleri ile sayfalama yapar.
     """
 
-    if not GETIR_EMAIL or not GETIR_PASSWORD:
+    if not GETIR_BEARER_TOKEN:
         return {
             "ok": False,
-            "reason": "GETIR_EMAIL veya GETIR_PASSWORD ortam değişkenleri tanımlı değil."
+            "reason": "GETIR_BEARER_TOKEN ortam değişkeni tanımlı değil."
         }
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
-        # 1) Login isteği atmayı dene
-        try:
-            login_payload = {
-                "email": GETIR_EMAIL,
-                "password": GETIR_PASSWORD,
-            }
+    headers = {
+        "Authorization": f"Bearer {GETIR_BEARER_TOKEN}",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://franchise.getir.com",
+        "Referer": "https://franchise.getir.com/stock/current",
+    }
 
-            login_resp = await client.post(LOGIN_URL, data=login_payload)
-        except Exception as e:
-            return {
-                "ok": False,
-                "step": "login_request",
-                "error": str(e),
-            }
+    params = {
+        "limit": limit,
+        "offset": offset,
+    }
 
-        # 2) Login sonrası stock sayfasını çek
-        try:
-            stock_resp = await client.get(STOCK_URL)
-        except Exception as e:
-            return {
-                "ok": False,
-                "step": "stock_request",
-                "error": str(e),
-            }
-
-        # Sonuç özetini dön (debug amaçlı)
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(STOCKS_URL, headers=headers, params=params)
+    except Exception as e:
         return {
-            "ok": True,
-            "login_status_code": login_resp.status_code,
-            "stock_status_code": stock_resp.status_code,
-            "stock_url_final": str(stock_resp.url),
-            "stock_text_preview": stock_resp.text[:300],  # ilk 300 karakter
+            "ok": False,
+            "step": "request",
+            "error": str(e),
         }
 
+    # JSON parse etmeyi dene
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
 
-@app.get("/test-getir")
-async def test_getir():
+    # Ön izleme: çok veri varsa ilk birkaç elemanı göster
+    preview = data
+    if isinstance(data, list):
+        preview = data[:3]
+    elif isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
+        preview = {
+            **{k: v for k, v in data.items() if k != "items"},
+            "items_preview": data["items"][:3],
+        }
+
+    return {
+        "ok": resp.status_code == 200,
+        "status_code": resp.status_code,
+        "url": str(resp.url),
+        "preview": preview,
+    }
+
+
+@app.get("/test-stocks")
+async def test_stocks(limit: int = 50, offset: int = 0):
     """
-    Tarayıcıdan çağırıp Getir login + stock akışını test etmek için.
+    Tarayıcıdan çağırıp Getir stocks endpoint'ini test etmek için.
+    Örn:
+      /test-stocks
+      /test-stocks?limit=10&offset=0
     """
-    result = await login_and_fetch_stock()
-    return result
+    return await fetch_stocks(limit=limit, offset=offset)
 
 
 # ------------------------
-# TELEGRAM WEBHOOK
+# TELEGRAM WEBHOOK (Şimdilik echo)
 # ------------------------
 
 @app.post("/webhook")
@@ -111,7 +117,6 @@ async def telegram_webhook(request: Request):
     if not chat_id:
         return {"ok": True}
 
-    # Basit echo cevabı
     reply_text = f"Sen yazdın: {text}"
 
     if TELEGRAM_TOKEN:
